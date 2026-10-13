@@ -272,7 +272,8 @@ input, select, textarea { font-size: 16px !important; }
 .mvslot.lifted { outline: 2px solid var(--accent); transform: scale(1.02); background: #13233f; }
 .mvslot.target { outline: 2px dashed var(--warn); }
 /* へんげんじざい・リベロのタイプ変化 */
-.tchg { margin-top: 5px; min-height: 30px; padding: 2px 6px; border-radius: 8px; }
+.tchg { flex: 1; min-width: 0; }
+.side .nm .ty { vertical-align: 2px; }
 .tchg.on { border-color: var(--warn); color: var(--warn); }
 
 </style>
@@ -1693,10 +1694,8 @@ window.OCR_DIGITS = [
     const forms = formsOf(m);
     const formBtns = forms.length > 1 ? `<div class="forms">${forms.map((f) => `<button class="fbtn${f.s === m.s ? ' on' : ''}" title="${esc(f.n)}" data-a="sideform" data-w="${who}" data-v="${f.s}">${esc(formLabel(f, forms))}</button>`).join('')}</div>` : '';
     const ab = m.ab.includes(b.ability) ? b.ability : (m.ab[0] || '');
-    // タイプが変わった後の状態を選べる (へんげんじざい・リベロ / みずびたし など)。自分・相手どちらも
-    const tchg = `<select class="tchg${mods.typeChange ? ' on' : ''}" data-change="tchg" data-w="${who}"><option value="">${PROTEAN.includes(ab) ? 'タイプ: 変化前' : 'タイプ: そのまま'}</option>${TYPE_ORDER.map((ty) => `<option value="${ty}"${mods.typeChange === ty ? ' selected' : ''}>→ ${ty}タイプ</option>`).join('')}</select>`;
     return `<div class="side${attacker ? ' atk' : ''}">
-      <div class="srow"><img class="pic" src="${imgSrc(m)}" alt=""><div class="grow"><div class="nm">${esc(m.n)}</div><div class="sub1">${esc(b.nature)}・${esc(ab)}<br>${esc(b.item || 'もちものなし')}</div></div></div>${formBtns}${tchg}
+      <div class="srow"><img class="pic" src="${imgSrc(m)}" alt=""><div class="grow"><div class="nm">${esc(m.n)}${mods.typeChange ? ' ' + tyChip(mods.typeChange) : ''}</div><div class="sub1">${esc(b.nature)}・${esc(ab)}<br>${esc(b.item || 'もちものなし')}</div></div></div>${formBtns}
     </div>`;
   }
 
@@ -1775,12 +1774,13 @@ window.OCR_DIGITS = [
         const v = (mods.boosts && mods.boosts[k]) || 0;
         return `<div class="rk"><div class="lb">${BK_NAME[k]}</div><div class="rkc"><button data-a="bst" data-w="${who}" data-k="${k}" data-v="-1">−</button><span class="${v > 0 ? 'up' : v < 0 ? 'dn' : ''}">${v > 0 ? '+' + v : v}</span><button data-a="bst" data-w="${who}" data-k="${k}" data-v="1">＋</button></div></div>`;
       }).join('')}</div>
-      <div class="row" style="margin-top:4px">${sel('status', STATUS, mods.status || '')}${sel('hp', [100, 75, 50, 25, 10].map((v) => [v, 'HP ' + v + '%']), mods.hpPct)}<button class="chip sm${mods.tailwind ? ' on' : ''}" data-a="tailwind" data-w="${who}" style="flex:none">おいかぜ</button></div></div>`;
+      <div class="row" style="margin-top:4px">${sel('status', STATUS, mods.status || '')}${sel('hp', [100, 75, 50, 25, 10].map((v) => [v, 'HP ' + v + '%']), mods.hpPct)}<button class="chip sm${mods.tailwind ? ' on' : ''}" data-a="tailwind" data-w="${who}" style="flex:none">おいかぜ</button></div>
+      <div class="row" style="margin-top:4px"><span class="sub" style="flex:none">タイプ変化</span><select class="slim tchg${mods.typeChange ? ' on' : ''}" data-change="tchg" data-w="${who}"><option value="">なし${PROTEAN.includes(getBuild(who).ability) ? ' (へんげんじざい: 次の技がタイプ一致)' : ''}</option>${TYPE_ORDER.map((ty) => `<option value="${ty}"${mods.typeChange === ty ? ' selected' : ''}>→ ${ty}</option>`).join('')}</select></div></div>`;
     };
     const meBlock = !hasMe ? '' : S.freeMode ? blk('me', '自分')
       : `<details data-d="meOpen"${U.meOpen ? ' open' : ''} style="margin-bottom:4px"><summary class="who">自分の状態 (ランク・状態異常・HP)</summary>${blk('me', '')}</details>`;
     if (!meBlock && !hasOpp) return '';
-    return `<div class="card tight"><div class="sec">状態 <span class="sec-note">ランク・状態異常・HP・おいかぜ</span></div>${meBlock}${hasOpp ? blk('opp', '相手') : ''}</div>`;
+    return `<div class="card tight"><div class="sec">状態 <span class="sec-note">ランク・状態異常・HP・おいかぜ・タイプ変化</span></div>${meBlock}${hasOpp ? blk('opp', '相手') : ''}</div>`;
   }
 
   function fieldHTML() {
@@ -1968,7 +1968,7 @@ window.OCR_DIGITS = [
         <li>真ん中の ▶ で攻撃の向きを切替。対戦カードの「通常/メガ」でメガシンカの前後を切替(相手がメガストーンを持つと自動でメガ)。</li>
         <li>能力ポイントは0〜32(合計66)。数字をタップで32↔0。性格は↑上げる能力・↓下げる能力のボタンで選びます。</li>
         <li>ひでり・すなおこし等の特性のポケモンを選ぶと天候・フィールドを自動で設定します(変更も可)。</li>
-        <li>へんげんじざい・リベロやみずびたしでタイプが変わったときは、対戦カードの「タイプ」で変化後のタイプを選べます(へんげんじざい・リベロは「変化前」だと次に使う技がタイプ一致になります)。</li>
+        <li>へんげんじざい・リベロやみずびたしでタイプが変わったときは、「状態」の「タイプ変化」で変化後のタイプを選べます(へんげんじざい・リベロは「なし」だと次に使う技がタイプ一致になります)。</li>
         <li>パーティは10個まで登録できます。データはこの端末のブラウザ内だけに保存されます(機種変更前は「パーティ」タブのバックアップで書き出してください)。</li>
         <li>「ゲームのスクショから登録」: ゲームのパーティ一覧の「能力」「ステータス」画面のスクリーンショットから読み取ります。画像は端末の中だけで処理し、外部には送りません(文字の読み取りに使うデータだけを初回にダウンロードします)。読み取り結果は登録前に確認してください。</li>
       </ul>
