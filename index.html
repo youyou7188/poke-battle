@@ -271,6 +271,10 @@ input, select, textarea { font-size: 16px !important; }
 .mvslot { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; transition: transform .1s; }
 .mvslot.lifted { outline: 2px solid var(--accent); transform: scale(1.02); background: #13233f; }
 .mvslot.target { outline: 2px dashed var(--warn); }
+/* へんげんじざい・リベロのタイプ変化 */
+.tchg { margin-top: 5px; min-height: 30px; padding: 2px 6px; border-radius: 8px; }
+.tchg.on { border-color: var(--warn); color: var(--warn); }
+
 </style>
 <div id="app"></div>
 <!--
@@ -379,13 +383,33 @@ window.PDATA = {"mons":[{"s":"venusaur","en":"Venusaur","n":"フシギバナ","n
       nature: D.natures[b.nature] || 'Serious', evs, boosts,
       ability: abilityEn(m, b.ability), item: ITEM_EN[b.item] || undefined, status: STATUS[mods.status] || '',
     };
+    // タイプが変わった後 (mods.typeChange = 日本語のタイプ名。へんげんじざい・リベロ / みずびたし など)
+    // 変わった後はそのタイプの技だけがタイプ一致になり、受けるダメージの相性も変わる。
+    // へんげんじざい・リベロはチャンピオンズ(第9世代と同じ)では出てから1回だけ変わる。計算機はこの特性があると全部の技を
+    // タイプ一致にするので、変化後は特性を効果の無いもの(プレッシャー)に置き換えて計算する
+    const tc = mods.typeChange && D.types[mods.typeChange];
+    if (tc && /^(Protean|Libero)$/.test(opt.ability)) opt.ability = 'Pressure';
     let p = new C.Pokemon(gen, m.en, opt);
     if (mods.hpPct != null && mods.hpPct < 100) {
       opt.curHP = Math.max(1, Math.floor((p.rawStats.hp * mods.hpPct) / 100));
       p = new C.Pokemon(gen, m.en, opt);
     }
+    // overrides で types を渡すと元の配列と混ざる(2つ目のタイプが残る)ので、作った後に置き換える
+    if (tc) setTypes(p, [tc]);
     return p;
   }
+  function setTypes(p, types) {
+    p.types = types.slice();
+    p.species = Object.assign({}, p.species, { types: types.slice() });
+    p.typeChanged = true;
+  }
+  // 計算機は計算の途中で Pokemon を複製し、そのときタイプを元の配列と混ぜてしまう。タイプを変えたものは複製後も同じタイプにする
+  const origClone = C.Pokemon.prototype.clone;
+  C.Pokemon.prototype.clone = function () {
+    const c = origClone.apply(this, arguments);
+    if (this.typeChanged) setTypes(c, this.types);
+    return c;
+  };
 
   function field(f) {
     return new C.Field({
@@ -1564,6 +1588,7 @@ window.OCR_DIGITS = [
   }
 
   /* ---------- 技リスト ---------- */
+  const PROTEAN = ['へんげんじざい', 'リベロ'];
   const TYPE_ORDER = ['ノーマル', 'ほのお', 'みず', 'でんき', 'くさ', 'こおり', 'かくとう', 'どく', 'じめん', 'ひこう', 'エスパー', 'むし', 'いわ', 'ゴースト', 'ドラゴン', 'あく', 'はがね', 'フェアリー'];
   const SELF_KO = ['explosion', 'selfdestruct', 'mistyexplosion', 'memento', 'finalgambit', 'futuresight', 'doomdesire']; // 自爆・遅れて当たる技は並びから除く
   const isDmg = (id) => MOVES[id] && MOVES[id].c !== '変化';
@@ -1668,8 +1693,10 @@ window.OCR_DIGITS = [
     const forms = formsOf(m);
     const formBtns = forms.length > 1 ? `<div class="forms">${forms.map((f) => `<button class="fbtn${f.s === m.s ? ' on' : ''}" title="${esc(f.n)}" data-a="sideform" data-w="${who}" data-v="${f.s}">${esc(formLabel(f, forms))}</button>`).join('')}</div>` : '';
     const ab = m.ab.includes(b.ability) ? b.ability : (m.ab[0] || '');
+    // タイプが変わった後の状態を選べる (へんげんじざい・リベロ / みずびたし など)。自分・相手どちらも
+    const tchg = `<select class="tchg${mods.typeChange ? ' on' : ''}" data-change="tchg" data-w="${who}"><option value="">${PROTEAN.includes(ab) ? 'タイプ: 変化前' : 'タイプ: そのまま'}</option>${TYPE_ORDER.map((ty) => `<option value="${ty}"${mods.typeChange === ty ? ' selected' : ''}>→ ${ty}タイプ</option>`).join('')}</select>`;
     return `<div class="side${attacker ? ' atk' : ''}">
-      <div class="srow"><img class="pic" src="${imgSrc(m)}" alt=""><div class="grow"><div class="nm">${esc(m.n)}</div><div class="sub1">${esc(b.nature)}・${esc(ab)}<br>${esc(b.item || 'もちものなし')}</div></div></div>${formBtns}
+      <div class="srow"><img class="pic" src="${imgSrc(m)}" alt=""><div class="grow"><div class="nm">${esc(m.n)}</div><div class="sub1">${esc(b.nature)}・${esc(ab)}<br>${esc(b.item || 'もちものなし')}</div></div></div>${formBtns}${tchg}
     </div>`;
   }
 
@@ -1913,7 +1940,6 @@ window.OCR_DIGITS = [
     mk('最速スカーフ', '素早32・性格↑・スカーフ', spPts(32), 'ようき', 'こだわりスカーフ');
     mk('準速 (素早32・補正なし)', '', spPts(32), 'まじめ', '');
     mk('無振り', '素早0・補正なし', spPts(0), 'まじめ', '');
-    presetsOf(BY[opp.slug]).filter((p) => p.set).forEach((p) => mk(`実戦の型 ${ptsLabel(p.pts)}`, `${p.nature} ${p.item || ''}`, p.pts, p.nature, p.item));
     mk('現在の相手設定', `${opp.nature} ${ptsLabel(opp.pts)} ${opp.item || ''}`, opp.pts, opp.nature, opp.item);
     entries.sort((a, b) => b.sp - a.sp);
     h += `<div class="card"><div class="title">素早さ順 (相手: ${esc(om.n)})</div><div class="sub">天候・フィールド・ランク補正・おいかぜ・まひは「計算」タブの設定を反映</div><table class="tbl" style="margin-top:6px"><tr><th></th><th>素早さ</th></tr>` +
@@ -1942,6 +1968,7 @@ window.OCR_DIGITS = [
         <li>真ん中の ▶ で攻撃の向きを切替。対戦カードの「通常/メガ」でメガシンカの前後を切替(相手がメガストーンを持つと自動でメガ)。</li>
         <li>能力ポイントは0〜32(合計66)。数字をタップで32↔0。性格は↑上げる能力・↓下げる能力のボタンで選びます。</li>
         <li>ひでり・すなおこし等の特性のポケモンを選ぶと天候・フィールドを自動で設定します(変更も可)。</li>
+        <li>へんげんじざい・リベロやみずびたしでタイプが変わったときは、対戦カードの「タイプ」で変化後のタイプを選べます(へんげんじざい・リベロは「変化前」だと次に使う技がタイプ一致になります)。</li>
         <li>パーティは10個まで登録できます。データはこの端末のブラウザ内だけに保存されます(機種変更前は「パーティ」タブのバックアップで書き出してください)。</li>
         <li>「ゲームのスクショから登録」: ゲームのパーティ一覧の「能力」「ステータス」画面のスクリーンショットから読み取ります。画像は端末の中だけで処理し、外部には送りません(文字の読み取りに使うデータだけを初回にダウンロードします)。読み取り結果は登録前に確認してください。</li>
       </ul>
@@ -2187,7 +2214,7 @@ window.OCR_DIGITS = [
     selmem: (t) => {
       const i = +t.v;
       S.mi = i;
-      S.meMods.form = '';
+      S.meMods.form = ''; S.meMods.typeChange = '';
       if (!S.parties[S.pi].mons[i]) U.sheets.push({ type: 'member', pi: S.pi, mi: i });
       else autoField(S.parties[S.pi].mons[i], S.meMods);
     },
@@ -2380,6 +2407,7 @@ window.OCR_DIGITS = [
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (t.id === 'shotfile') { shotRun(t.files); return; }
+    if (t.dataset.change === 'tchg') { (t.dataset.w === 'opp' ? S.oppMods : S.meMods).typeChange = t.value; render(); return; }
     if (t.id === 'shottarget') { const sh = U.sheets[U.sheets.length - 1]; sh.target = +t.value; return; }
     if (t.dataset.change === 'party') {
       if (t.value === 'free') { S.freeMode = true; S.meMods.form = ''; } else A.party({ v: t.value });
