@@ -267,6 +267,10 @@ input, select, textarea { font-size: 16px !important; }
 .pill { white-space: nowrap; display: inline-block; margin: 2px 0; }
 .toast { max-width: calc(100vw - 32px); width: max-content; text-align: center; border-radius: 14px; line-height: 1.4; }
 
+/* ---- 技の並べ替え (長押し) ---- */
+.mvslot { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; transition: transform .1s; }
+.mvslot.lifted { outline: 2px solid var(--accent); transform: scale(1.02); background: #13233f; }
+.mvslot.target { outline: 2px dashed var(--warn); }
 </style>
 <div id="app"></div>
 <!--
@@ -1096,10 +1100,13 @@ window.OCR_DIGITS = [
     return workerPs[i];
   }
   // 白い文字を黒にして読む (大津の方法で2値化。文字色が少し違っても読める)
-  function textCanvas(cv, rect) {
+  // opt.h: 読ませる高さ(px) / opt.white: 大津でなく「白い所だけ」を文字にする(背景の番号などが混ざるとき用)
+  function textCanvas(cv, rect, opt) {
+    opt = opt || {};
     const [x, y, w, h] = rect;
+    const H = opt.h || 68; // 文字の高さをそろえる(試作で一番よく読めた大きさ)
     const c = document.createElement('canvas');
-    c.height = 68; c.width = Math.round((w * 68) / h); // 文字の高さをそろえる(試作で一番よく読めた大きさ)
+    c.height = H; c.width = Math.round((w * H) / h);
     const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
     g.drawImage(cv, x, y, w, h, 0, 0, c.width, c.height);
     const d = g.getImageData(0, 0, c.width, c.height), p = d.data, n = p.length / 4;
@@ -1114,13 +1121,38 @@ window.OCR_DIGITS = [
       const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) * (mB - mF);
       if (v > mx) { mx = v; th = t; }
     }
-    for (let i = 0; i < n; i++) { const b = gray[i] > th ? 0 : 255; p[i * 4] = p[i * 4 + 1] = p[i * 4 + 2] = b; p[i * 4 + 3] = 255; }
+    for (let i = 0; i < n; i++) {
+      const on = opt.white ? Math.min(p[i * 4], p[i * 4 + 1], p[i * 4 + 2]) > 185 : gray[i] > th;
+      const b = on ? 0 : 255; p[i * 4] = p[i * 4 + 1] = p[i * 4 + 2] = b; p[i * 4 + 3] = 255;
+    }
     g.putImageData(d, 0, 0);
     return c;
   }
-  async function readText(w, cv, rect) {
-    const r = await w.recognize(textCanvas(cv, rect));
+  async function readText(w, cv, rect, opt) {
+    const r = await w.recognize(textCanvas(cv, rect, opt));
     return r.data.text.replace(/\s+/g, '');
+  }
+  // 読んで候補に寄せる。合わなければ読み方を変えて読み直す (大きく / 白だけ / 少し広く)
+  const RETRY = [{ h: 96 }, { white: true }, { white: true, h: 96 }, { pad: 0.15 }];
+  async function readMatch(w, cv, rect, cands, nameOf) {
+    let txt = await readText(w, cv, rect);
+    let r = nearest(txt, cands, nameOf);
+    for (let i = 0; !r && i < RETRY.length; i++) {
+      const o = RETRY[i];
+      const rc = o.pad ? [rect[0] - rect[2] * o.pad * 0.3, rect[1] - rect[3] * o.pad, rect[2] * (1 + o.pad), rect[3] * (1 + 2 * o.pad)] : rect;
+      const t2 = await readText(w, cv, rc, o);
+      const r2 = nearest(t2, cands, nameOf);
+      if (r2) { r = r2; txt = t2; } else if (!clean(txt)) txt = t2;
+    }
+    return { txt, r };
+  }
+  // 技の行に技のアイコン(色の付いた四角)があるか = 技が入っているか
+  function hasIcon(cv, rect) {
+    const g = cv.getContext('2d');
+    const d = g.getImageData(Math.round(rect[0]), Math.round(rect[1]), Math.max(1, Math.round(rect[2])), Math.max(1, Math.round(rect[3]))).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) { const mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]); if (mx > 120 && mx - mn > 90 && !(d[i + 2] > d[i] && d[i + 2] > d[i + 1] && d[i] > 90)) n++; }
+    return n / (d.length / 4) > 0.08;
   }
 
   /* ---------- 名前の照合 ---------- */
@@ -1173,6 +1205,9 @@ window.OCR_DIGITS = [
     const abShot = shots.find((s) => s.kind === 'ability');
     if (shots.length === 2 && (!stShot || !abShot)) throw new Error('「能力」と「ステータス」の画面を1枚ずつ選んでください (同じ画面が2枚になっています)。');
     const n = Math.max(stShot ? stShot.cards.length : 0, abShot ? abShot.cards.length : 0);
+    const allMons = D.mons.filter((m) => !m.mg);
+    const allMoves = Object.keys(D.moves).filter((id) => id !== 'nomove');
+    const items = D.items.map((x) => x.n);
     const mons = [];
     for (let i = 0; i < n; i++) mons.push({ warn: [] });
 
@@ -1196,10 +1231,20 @@ window.OCR_DIGITS = [
         const c = abShot.cards[i], cv = abShot.cv, o = mons[i];
         // 名前も読む (数字だけで決まらないときの手がかり / 2枚が同じパーティかの確認)
         o.tName = await readText(w, cv, at(c, 70, 3, 220, 38));
-        o.tAb = await readText(w, cv, at(c, 80, 42, 300, 34));
-        o.tItem = await readText(w, cv, at(c, 80, 80, 300, 34));
-        o.tMoves = [];
-        for (let k = 0; k < 4; k++) o.tMoves.push(await readText(w, cv, at(c, 422, [8, 46, 83, 120][k], 175, 32)));
+        // 候補: 数字から決まった種類(複数ならまとめて)の特性・覚える技。決まっていなければ全部
+        const cm = o.cands && o.cands.length ? o.cands.map((x) => x.m) : null;
+        const abC = cm ? [...new Set(cm.flatMap((m) => m.ab))] : [...new Set(D.mons.flatMap((m) => m.ab))];
+        const mvC = cm ? [...new Set(cm.flatMap((m) => m.mv))] : allMoves;
+        o.tAb = (await readMatch(w, cv, at(c, 80, 42, 300, 34), abC)).txt;
+        o.tItem = (await readMatch(w, cv, at(c, 80, 80, 300, 34), items)).txt;
+        o.tMoves = []; o.mvMissing = [];
+        for (let k = 0; k < 4; k++) {
+          const y = [8, 46, 83, 120][k];
+          const { txt, r } = await readMatch(w, cv, at(c, 422, y, 190, 32), mvC, (id) => D.moves[id].n);
+          o.tMoves.push(r ? D.moves[r.v].n : txt);
+          // 技のアイコンはあるのに読めなかった行は、黙って落とさず知らせる
+          if (!r && hasIcon(cv, at(c, 395, y + 6, 24, 20))) o.mvMissing.push(k);
+        }
         progress(`文字を読んでいます (${++done}/${abShot.cards.length})`);
       };
       progress(`文字を読んでいます (0/${abShot.cards.length})`);
@@ -1207,9 +1252,6 @@ window.OCR_DIGITS = [
     }
 
     // まとめ: 種類 → 特性・持ち物・技を候補に寄せる
-    const allMons = D.mons.filter((m) => !m.mg);
-    const allMoves = Object.keys(D.moves).filter((id) => id !== 'nomove');
-    const items = D.items.map((x) => x.n);
     const res = mons.map((o) => {
       let cands = o.cands ? o.cands.filter((c) => c.miss === (o.cands[0] || {}).miss) : [];
       const byName = o.tName ? nearest(o.tName, allMons, (m) => m.n) : null;
@@ -1239,7 +1281,7 @@ window.OCR_DIGITS = [
       }
       if (o.tMoves) {
         o.tMoves.forEach((t, k) => {
-          if (!clean(t)) return;
+          if (!clean(t)) { if ((o.mvMissing || []).includes(k)) warn.push(`${k + 1}つ目の技が読み取れませんでした`); return; }
           const own = nearest(t, m.mv, (id) => D.moves[id].n);
           const r = own || nearest(t, allMoves, (id) => D.moves[id].n);
           if (r && !own) warn.push(`「${D.moves[r.v].n}」はこのアプリのデータでは覚えない技です`);
@@ -1517,7 +1559,7 @@ window.OCR_DIGITS = [
   function getBuild(who) {
     if (who === 'opp') return S.opp;
     if (who === 'me') return curMe();
-    if (who === 'mem') { const e = U.sheets.find((s) => s.type === 'member'); return e ? S.parties[e.pi].mons[e.mi] : null; }
+    if (who === 'mem') { const e = U.sheets.find((s) => s.type === 'member'); return e ? memGet(e) : null; }
     return null;
   }
 
@@ -1933,15 +1975,20 @@ window.OCR_DIGITS = [
     if (sh.step === 'busy') return h + `<div class="card"><div class="title">読み取り中…</div><div class="sub" id="shotst">${esc(sh.msg || '')}</div></div>`;
     if (sh.step === 'result') {
       const ok = sh.res.filter((r) => r.ok).length;
-      h += `<div class="card"><div class="sub">読み取った内容です。登録したあとも、パーティ画面で1匹ずつ直せます。</div>`;
+      h += `<div class="card"><div class="sub">読み取った内容です。違うところは「直す」で、その場で修正できます。</div>`;
       sh.res.forEach((r, i) => {
-        if (!r.ok) { h += `<div class="shotrow"><b>${i + 1}.</b> <span class="bad">${esc(r.warn.join(' / '))}</span></div>`; return; }
+        if (!r.ok) {
+          h += `<div class="shotrow"><div class="row"><div class="grow"><b>${i + 1}.</b> <span class="bad">${esc(r.warn.join(' / '))}</span></div><button class="btn sm" data-a="shotedit" data-v="${i}">選ぶ</button></div></div>`;
+          return;
+        }
         const b = r.b, m = BY[b.slug];
-        h += `<div class="shotrow"><div class="row" style="gap:6px">${img(m)}<div class="grow"><b>${i + 1}. ${esc(m.n)}</b> <span class="sub">${esc(b.nature)} / ${esc(b.ability)}</span><br>
+        // 持ち物: 手で直す前はゲームの表示どおり(計算に使わない物はその旨)、直した後はアプリの設定
+        const itemTxt = r.edited ? (b.item || 'なし') : (r.gameItem || 'なし') + (r.gameItem && !ITEM_SET.has(r.gameItem) ? ' (計算に関係しないので登録しません)' : '');
+        h += `<div class="shotrow"><div class="row" style="gap:6px;align-items:flex-start">${img(m)}<div class="grow"><b>${i + 1}. ${esc(m.n)}</b> <span class="sub">${esc(b.nature)} / ${esc(b.ability)}</span><br>
           <span class="sub">${esc(ptsLabel(b.pts))} → ${E.stats(m, b).join('-')}</span><br>
-          <span class="sub">持ち物: ${esc(r.gameItem || 'なし')}${r.gameItem && !ITEM_SET.has(r.gameItem) ? ' (計算に関係しないので登録しません)' : ''}</span></div></div>
-          <div>${b.moves.map((id) => `<span class="pill">${esc(mvName(id))}</span>`).join(' ') || '<span class="sub">技なし</span>'}</div>
-          ${r.warn.length ? `<div class="bad" style="font-size:12px;margin-top:3px">⚠ ${esc(r.warn.join(' / '))}</div>` : ''}</div>`;
+          <span class="sub">持ち物: ${esc(itemTxt)}</span></div><button class="btn sm" data-a="shotedit" data-v="${i}">直す</button></div>
+          <div>${b.moves.filter(Boolean).map((id) => `<span class="pill">${esc(mvName(id))}</span>`).join(' ') || '<span class="sub">技なし</span>'}</div>
+          ${r.warn.length ? `<div class="bad" style="font-size:12px;margin-top:3px">⚠ ${esc(r.warn.join(' / '))}</div>` : r.edited ? '<div class="sub" style="color:var(--good);margin-top:3px">✔ 修正済み</div>' : ''}</div>`;
       });
       h += '</div>';
       h += `<div class="card"><label class="f" style="margin-top:0">登録先 (今の中身は上書きされます)</label><select id="shottarget">${S.parties.map((p, i) => `<option value="${i}"${i === sh.target ? ' selected' : ''}>${i + 1}. ${esc(p.name)}${p.mons.some(Boolean) ? ' (登録あり)' : ''}</option>`).join('')}</select>
@@ -1973,9 +2020,24 @@ window.OCR_DIGITS = [
     }
     render();
   }
+  // 編集シートの対象: パーティの1匹 / スクショ読み取り結果の1匹 (sh.shot = 結果の番号)
+  const shotSheetOf = () => U.sheets.find((s) => s.type === 'shot');
+  function memGet(sh) {
+    if (sh.shot != null) { const r = shotSheetOf().res[sh.shot]; return r && r.b; }
+    return S.parties[sh.pi].mons[sh.mi];
+  }
+  function memSet(sh, b) {
+    if (sh.shot != null) {
+      const res = shotSheetOf().res, r = res[sh.shot] || {};
+      res[sh.shot] = { ok: !!b, b, gameItem: b ? r.gameItem : '', warn: b ? [] : ['登録しません'], edited: true };
+      return;
+    }
+    S.parties[sh.pi].mons[sh.mi] = b;
+  }
   function memberSheet(sh) {
-    const b = S.parties[sh.pi].mons[sh.mi];
-    let h = `<div class="hd"><div class="title grow">${esc(S.parties[sh.pi].name)} - ${sh.mi + 1}番目</div>${b ? '<button class="btn sm danger" data-a="delmem">削除</button>' : ''}<button class="btn sm primary" data-a="closesheet">完了</button></div>`;
+    const b = memGet(sh);
+    const title = sh.shot != null ? `読み取り結果 - ${sh.shot + 1}番目` : `${esc(S.parties[sh.pi].name)} - ${sh.mi + 1}番目`;
+    let h = `<div class="hd"><div class="title grow">${title}</div>${b ? `<button class="btn sm danger" data-a="delmem">${sh.shot != null ? '外す' : '削除'}</button>` : ''}<button class="btn sm primary" data-a="closesheet">完了</button></div>`;
     if (!b) {
       h += `<div class="card"><div class="sug-wrap"><input type="search" id="memq" placeholder="ポケモン名・略称 (例: ガブ)" autocomplete="off"><div class="sug" id="memsug" style="position:static;box-shadow:none;max-height:none;margin-top:6px" hidden></div></div>`;
       if (S.recent.length) h += `<div class="sub" style="margin-top:6px">最近使ったポケモン:</div><div class="chips" style="margin-top:4px">${S.recent.map((s) => `<button class="chip" data-a="newmem" data-v="${s}">${esc(BY[s].n)}</button>`).join('')}</div>`;
@@ -1984,11 +2046,11 @@ window.OCR_DIGITS = [
     const m = BY[b.slug];
     h += `<div class="card"><div class="row">${img(m).replace('<img', '<img style="width:56px;height:56px"')}<div class="grow"><div class="title">${esc(m.n)}</div>${m.t.map((t) => tyChip(t, true)).join(' ')}<div class="sub" style="margin-top:4px">種族値 ${m.b.join('-')}</div></div><button class="btn sm" data-a="chgmon">変更</button></div>`;
     h += editorHTML(b, 'mem') + '</div>';
-    h += '<div class="card"><div class="title">技 (最大4つ)</div>';
+    h += `<div class="card"><div class="title">技 (最大4つ) <span class="sub" style="font-weight:400">${U.mvPick != null ? '入れ替える先をタップ' : '長押しで並べ替え'}</span></div>`;
     for (let i = 0; i < 4; i++) {
       const id = (b.moves || [])[i];
       const mv = id && MOVES[id];
-      h += `<button class="slot" data-a="movepick" data-w="mem" data-v="${i}" style="min-height:46px">${mv ? `${tyChip(mv.t)} <b>${esc(mv.n)}</b><span class="sub" style="margin-left:auto">${esc(mv.c)} 威力${mv.p == null ? '-' : mv.p}</span>` : '<span class="sub">＋ 技を選ぶ</span>'}</button>`;
+      h += `<button class="slot mvslot${U.mvPick === i ? ' lifted' : ''}" data-a="movepick" data-w="mem" data-v="${i}" data-i="${i}" style="min-height:46px">${mv ? `${tyChip(mv.t)} <b>${esc(mv.n)}</b><span class="sub" style="margin-left:auto">${esc(mv.c)} 威力${mv.p == null ? '-' : mv.p}</span>` : '<span class="sub">＋ 技を選ぶ</span>'}</button>`;
     }
     return h + '</div>';
   }
@@ -2143,7 +2205,12 @@ window.OCR_DIGITS = [
       S.freeMode = false; S.meMods.form = ''; S.pi = +t.v; S.mi = Math.max(0, S.parties[S.pi].mons.findIndex(Boolean));
     },
     editmem: (t) => { U.sheets.push({ type: 'member', pi: S.pi, mi: +t.v }); },
-    closesheet: () => { U.sheets.pop(); },
+    closesheet: () => {
+      const sh = U.sheets.pop();
+      // スクショ結果を手で直したら、警告は消して「修正済み」にする
+      if (sh && sh.type === 'member' && sh.shot != null) { const r = shotSheetOf().res[sh.shot]; if (r && r.ok) { r.warn = []; r.edited = true; } }
+      U.mvPick = null;
+    },
     shotopen: () => { U.sheets.push({ type: 'shot', step: 'pick' }); },
     shotretry: () => { const sh = U.sheets[U.sheets.length - 1]; sh.step = 'pick'; sh.err = ''; },
     shotsave: () => {
@@ -2162,14 +2229,15 @@ window.OCR_DIGITS = [
       U.sheets.pop();
       toast('パーティ' + (ti + 1) + 'に登録しました');
     },
-    delmem: () => { const sh = U.sheets[U.sheets.length - 1]; S.parties[sh.pi].mons[sh.mi] = null; U.sheets.pop(); },
-    chgmon: () => { const sh = U.sheets.find((s) => s.type === 'member'); S.parties[sh.pi].mons[sh.mi] = null; },
+    delmem: () => { const sh = U.sheets[U.sheets.length - 1]; memSet(sh, null); U.sheets.pop(); },
+    chgmon: () => { const sh = U.sheets.find((s) => s.type === 'member'); memSet(sh, null); },
     newmem: (t) => {
       const sh = U.sheets.find((s) => s.type === 'member');
-      S.parties[sh.pi].mons[sh.mi] = buildFrom(BY[t.v]);
+      memSet(sh, buildFrom(BY[t.v]));
       remember(t.v);
-      if (sh.pi === S.pi) S.mi = sh.mi;
+      if (sh.shot == null && sh.pi === S.pi) S.mi = sh.mi;
     },
+    shotedit: (t) => { U.sheets.push({ type: 'member', shot: +t.v }); },
     memsug: (t) => A.newmem(t),
     form: (t) => {
       const b = getBuild(t.w), m = BY[t.v];
@@ -2234,9 +2302,64 @@ window.OCR_DIGITS = [
     },
   };
 
+  /* ---------- 技の並べ替え (編集シートの技を長押し → 指を離した所 / 次にタップした所と入れ替え) ---------- */
+  const LP = { timer: 0, from: -1, x: 0, y: 0, active: false, target: -1 };
+  const slotAt = (x, y) => { const el = document.elementFromPoint(x, y); const s = el && el.closest('.mvslot'); return s ? +s.dataset.i : -1; };
+  function swapMoves(a, b) {
+    const bd = getBuild('mem');
+    if (!bd || a === b || a < 0 || b < 0) return;
+    const mv = (bd.moves || []).slice();
+    while (mv.length < 4) mv.push('');
+    [mv[a], mv[b]] = [mv[b], mv[a]];
+    bd.moves = mv.filter(Boolean); // 空きは後ろに詰める
+  }
+  const lpEnd = () => { clearTimeout(LP.timer); LP.timer = 0; };
+  document.addEventListener('pointerdown', (e) => {
+    const s = e.target.closest('.mvslot');
+    if (!s || U.mvPick != null) return;
+    LP.from = +s.dataset.i; LP.x = e.clientX; LP.y = e.clientY; LP.active = false; LP.target = -1;
+    lpEnd();
+    LP.timer = setTimeout(() => {
+      LP.active = true; LP.suppress = true;
+      s.classList.add('lifted');
+      try { navigator.vibrate && navigator.vibrate(15); } catch (er) { /* ignore */ }
+    }, 450);
+  });
+  document.addEventListener('pointermove', (e) => {
+    if (LP.timer && !LP.active && Math.hypot(e.clientX - LP.x, e.clientY - LP.y) > 8) lpEnd(); // 長押し前に動いた = スクロール
+    if (!LP.active) return;
+    const j = slotAt(e.clientX, e.clientY);
+    if (j !== LP.target) {
+      document.querySelectorAll('.mvslot.target').forEach((x) => x.classList.remove('target'));
+      if (j >= 0 && j !== LP.from) document.querySelector(`.mvslot[data-i="${j}"]`).classList.add('target');
+      LP.target = j;
+    }
+  });
+  // 長押し中のドラッグで画面がスクロールしないように
+  document.addEventListener('touchmove', (e) => { if (LP.active) e.preventDefault(); }, { passive: false });
+  document.addEventListener('pointerup', (e) => {
+    lpEnd();
+    if (!LP.active) return;
+    LP.active = false;
+    const j = slotAt(e.clientX, e.clientY);
+    if (j >= 0 && j !== LP.from) { swapMoves(LP.from, j); U.mvPick = null; } else U.mvPick = LP.from; // 動かさずに離した → 次にタップした所と入れ替え
+    render();
+  });
+  document.addEventListener('pointercancel', () => { lpEnd(); if (LP.active) { LP.active = false; U.mvPick = LP.from; render(); } });
+  document.addEventListener('contextmenu', (e) => { if (e.target.closest('.mvslot')) e.preventDefault(); });
+
   document.addEventListener('click', (e) => {
     const bg = e.target.closest('.sheet-bg');
-    if (bg && e.target === bg) { U.sheets.pop(); render(); return; }
+    if (bg && e.target === bg) { U.sheets.pop(); U.mvPick = null; render(); return; }
+    // 長押しの直後のクリックは技選びを開かない
+    if (LP.suppress) { LP.suppress = false; if (e.target.closest('.mvslot')) return; }
+    if (U.mvPick != null) {
+      const s = e.target.closest('.mvslot');
+      if (s) swapMoves(U.mvPick, +s.dataset.i);
+      U.mvPick = null;
+      render();
+      if (s) return;
+    }
     const t = e.target.closest('[data-a]');
     if (!t) return;
     const fn = A[t.dataset.a];
