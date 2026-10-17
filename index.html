@@ -294,6 +294,12 @@ input, select, textarea { font-size: 16px !important; }
 .opprow .mem { border-color: #4a2a30; }
 .opprow .mem.on { border-color: var(--bad); }
 .mem .mhp { position: absolute; left: 5%; bottom: 2px; height: 3px; border-radius: 2px; background: var(--good); }
+/* 対戦カードの大きさを固定 (メガの切替ボタンが無いポケモン同士でも小さくならないように)。切替ボタンは1段に収めて下にそろえる */
+.vs .side { display: flex; flex-direction: column; height: 88px; }
+.vs .side .grow { min-width: 0; }
+.vs .side .nm, .vs .side .sub1 > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vs .side .forms { flex-wrap: nowrap; margin-top: auto; padding-top: 4px; }
+.vs .side .fbtn { flex: 1 1 0; min-width: 0; padding: 1px 2px; white-space: nowrap; }
 
 </style>
 <div id="app"></div>
@@ -1570,8 +1576,19 @@ window.OCR_DIGITS = [
   }
   const formsOf = (m) => MONS.filter((x) => x.no === m.no).sort((a, b) => a.mg - b.mg || a.s.localeCompare(b.s));
   // メガ表記: 通常 / メガ(1つだけ) / メガ1・メガ2 (X/Y/Zなど複数あるとき)
+  // 対戦カードの切替ボタン: 通常 + その姿のメガだけ(ロトム・ケンタロス等のフォルムは対戦中に変わらないので出さない)。
+  // ギルガルドだけはバトルスイッチでシールド/ブレードが入れ替わるので両方出す
+  const megaBase = (f) => { // メガの元の姿 (名前が「メガ」+元の名前。元の姿が1つしかないもの(フラエッテ・ニャオニクス)はそれ)
+    const bases = MONS.filter((x) => !x.mg && x.no === f.no);
+    return bases.find((x) => x.n === f.n.replace(/^メガ/, '').replace(/[XYZ]$/, '')) || (bases.length === 1 ? bases[0] : null);
+  };
+  function cardForms(b) {
+    const r = BY[b.slug], base = r.mg ? megaBase(r) || r : r;
+    const all = formsOf(base);
+    return all.filter((f) => f === base || (f.mg && megaBase(f) === base) || (!f.mg && /^ギルガルド/.test(base.n)));
+  }
   function formLabel(f, forms) {
-    if (!f.mg) return forms.filter((x) => !x.mg).length > 1 ? f.n : '通常';
+    if (!f.mg) return forms.filter((x) => !x.mg).length > 1 ? (f.n.match(/\((.+)\)/) || [0, f.n])[1] : '通常';
     const megas = forms.filter((x) => x.mg);
     return megas.length > 1 ? 'メガ' + (megas.indexOf(f) + 1) : 'メガ';
   }
@@ -1666,7 +1683,7 @@ window.OCR_DIGITS = [
   // 計算画面のメガシンカ切替 (mods.form) を反映した実際のフォルム
   function effM(b, mods) {
     const f = mods && mods.form && BY[mods.form];
-    return f && f.no === BY[b.slug].no ? f : BY[b.slug];
+    return f && f.no === BY[b.slug].no && cardForms(b).includes(f) ? f : BY[b.slug]; // 切替できるのは通常/メガ(とギルガルド)だけ
   }
   const side = (b, mods) => ({ m: effM(b, mods), b, mods });
   function curMe() {
@@ -1807,11 +1824,11 @@ window.OCR_DIGITS = [
     }
     const mods = who === 'opp' ? S.oppMods : S.meMods;
     const m = effM(b, mods);
-    const forms = formsOf(m);
+    const forms = cardForms(b);
     const formBtns = forms.length > 1 ? `<div class="forms">${forms.map((f) => `<button class="fbtn${f.s === m.s ? ' on' : ''}" title="${esc(f.n)}" data-a="sideform" data-w="${who}" data-v="${f.s}">${esc(formLabel(f, forms))}</button>`).join('')}</div>` : '';
     const ab = m.ab.includes(b.ability) ? b.ability : (m.ab[0] || '');
     return `<div class="side${attacker ? ' atk' : ''}">
-      <div class="srow"><img class="pic" src="${imgSrc(m)}" alt=""><div class="grow"><div class="nm">${esc(m.n)}${mods.typeChange ? ' ' + tyChip(mods.typeChange) : ''}</div><div class="sub1">${esc(b.nature)}・${esc(ab)}<br>${b.item && mods.itemGone ? `<s>${esc(b.item)}</s> 消費` : esc(b.item || 'もちものなし')}</div></div></div>${formBtns}
+      <div class="srow"><img class="pic" src="${imgSrc(m)}" alt=""><div class="grow"><div class="nm" title="${esc(m.n)}">${esc(m.n.replace(/\(パルデア(.)\)/, '($1)'))}${mods.typeChange ? ' ' + tyChip(mods.typeChange) : ''}</div><div class="sub1"><div>${esc(b.nature)}・${esc(ab)}</div><div>${b.item && mods.itemGone ? `<s>${esc(b.item)}</s> 消費` : esc(b.item || 'もちものなし')}</div></div></div></div>${formBtns}
     </div>`;
   }
 
@@ -2331,6 +2348,10 @@ window.OCR_DIGITS = [
     const sst = {}; // 開いているシート内のスクロール位置 (技を選んだあと先頭に戻らないように)
     document.querySelectorAll('[data-sheetbody]').forEach((el) => (sst[el.dataset.sheetbody] = el.scrollTop));
     $app.innerHTML = body + nav + sheets;
+    // 対戦カードの名前は1行に収まるまで文字を小さくする(カードの大きさを固定しているため。長い名前も切らずに読めるように)
+    document.querySelectorAll('.vs .side .nm').forEach((el) => {
+      for (let fs = 14; el.scrollWidth > el.clientWidth + 1 && fs > 8; fs -= 0.5) el.style.fontSize = fs - 0.5 + 'px';
+    });
     window.scrollTo(0, scrollY);
     document.querySelectorAll('[data-sheetbody]').forEach((el) => { if (sst[el.dataset.sheetbody]) el.scrollTop = sst[el.dataset.sheetbody]; });
     document.querySelectorAll('[data-hs]').forEach((el) => { if (hs[el.dataset.hs]) el.scrollLeft = hs[el.dataset.hs]; });
