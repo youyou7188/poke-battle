@@ -1730,6 +1730,8 @@ window.OCR_DIGITS = [
     const res = E.damage(att, def, id, fieldFor(dir), { hits: opt.hits });
     if (!res) return null;
     const row = { id, key, mv: MOVES[id], res };
+    // おはかまいり・そうだいしょうの技は、行に「倒れた味方」の選択を出す(攻撃する側)
+    if (res.max > 0 && (id === 'lastrespects' || E.abilityEn(att.m, att.b.ability) === 'Supreme Overlord')) row.fainted = dir === 'out' ? 'me' : 'opp';
     // 急所に当たったときのダメージ(小さく表示する用)
     if (res.max > 0) row.crit = E.damage(att, def, id, Object.assign(fieldFor(dir), { crit: true }), { hits: opt.hits, noKo: true });
     if (res.max > 0) row.ko = koLabel(res.ko);
@@ -1869,14 +1871,11 @@ window.OCR_DIGITS = [
     const unburden = E.abilityEn(effM(b, who === 'opp' ? S.oppMods : S.meMods), b.ability) === 'Unburden';
     return unburden ? !MEGA_TO[b.item] : !!(b.item && !MEGA_TO[b.item]);
   };
-  // 倒れた味方の数: おはかまいり(威力 50+50×数)・そうだいしょう(1体ごとに威力約1.1倍) を使えるポケモンのときだけ出す
-  function usesFainted(who) {
-    const b = getBuild(who);
-    if (!b) return false;
-    const m = effM(b, who === 'opp' ? S.oppMods : S.meMods);
-    return m.mv.includes('lastrespects') || E.abilityEn(m, b.ability) === 'Supreme Overlord';
-  }
-  const faintedRow = (who, mods) => `<div class="row" style="margin-top:4px"><span class="sub" style="flex:none">倒れた味方</span><div class="chips">${[0, 1, 2, 3, 4, 5].map((n) => `<button class="chip sm${(mods.fainted || 0) === n ? ' on' : ''}" data-a="fainted" data-w="${who}" data-v="${n}">${n}体</button>`).join('')}</div></div>`;
+  // 倒れた味方の数: おはかまいり(威力 50+50×数)・そうだいしょう(1体ごとに威力約1.1倍)。攻撃する側の数を、その技の行で選ぶ
+  const faintedChips = (who) => {
+    const cur = (who === 'opp' ? S.oppMods : S.meMods).fainted || 0;
+    return `<div class="chips"><span class="sub" style="flex:none;align-self:center">倒れた味方</span>${[0, 1, 2, 3, 4, 5].map((n) => `<button class="chip sm${cur === n ? ' on' : ''}" data-a="fainted" data-w="${who}" data-v="${n}">${n}体</button>`).join('')}</div>`;
+  };
   function stateHTML(hasMe, hasOpp) {
     const blk = (who, label) => {
       const mods = who === 'opp' ? S.oppMods : S.meMods;
@@ -1886,7 +1885,7 @@ window.OCR_DIGITS = [
         return `<div class="rk"><div class="lb">${BK_NAME[k]}</div><div class="rkc"><button data-a="bst" data-w="${who}" data-k="${k}" data-v="-1">−</button><span class="${v > 0 ? 'up' : v < 0 ? 'dn' : ''}">${v > 0 ? '+' + v : v}</span><button data-a="bst" data-w="${who}" data-k="${k}" data-v="1">＋</button></div></div>`;
       }).join('')}</div>
       <div class="row" style="margin-top:4px">${sel('status', STATUS, mods.status || '')}${sel('hp', [100, 75, 50, 25, 10].map((v) => [v, 'HP ' + v + '%']), mods.hpPct)}<button class="chip sm${mods.tailwind ? ' on' : ''}" data-a="tailwind" data-w="${who}" style="flex:none">おいかぜ</button></div>
-      <div class="row" style="margin-top:4px"><span class="sub" style="flex:none">タイプ変化</span><select class="slim tchg${mods.typeChange ? ' on' : ''}" data-change="tchg" data-w="${who}"><option value="">なし${PROTEAN.includes(getBuild(who).ability) ? ' (へんげんじざい: 次の技がタイプ一致)' : ''}</option>${TYPE_ORDER.map((ty) => `<option value="${ty}"${mods.typeChange === ty ? ' selected' : ''}>→ ${ty}</option>`).join('')}</select>${canConsume(who) ? `<button class="chip sm${mods.itemGone ? ' on' : ''}" data-a="itemgone" data-w="${who}" style="flex:none">持ち物を消費</button>` : ''}</div>${usesFainted(who) ? faintedRow(who, mods) : ''}</div>`;
+      <div class="row" style="margin-top:4px"><span class="sub" style="flex:none">タイプ変化</span><select class="slim tchg${mods.typeChange ? ' on' : ''}" data-change="tchg" data-w="${who}"><option value="">なし${PROTEAN.includes(getBuild(who).ability) ? ' (へんげんじざい: 次の技がタイプ一致)' : ''}</option>${TYPE_ORDER.map((ty) => `<option value="${ty}"${mods.typeChange === ty ? ' selected' : ''}>→ ${ty}</option>`).join('')}</select>${canConsume(who) ? `<button class="chip sm${mods.itemGone ? ' on' : ''}" data-a="itemgone" data-w="${who}" style="flex:none">持ち物を消費</button>` : ''}</div></div>`;
     };
     const meBlock = hasMe ? blk('me', '自分') : ''; // 自分の状態も常に開いておく(閉じていると相手の欄を自分のと間違えるため)
     if (!meBlock && !hasOpp) return '';
@@ -2015,8 +2014,9 @@ window.OCR_DIGITS = [
     if (res.assumedItem) h += '<div class="sub">相手が持ち物を持っているとして計算 (持ち物なしなら失敗)</div>';
     if (row.crit && row.crit.max > 0 && !S.field.crit) h += `<div class="crit">急所: ${pct(row.crit.min)}〜${pct(row.crit.max)}% (${row.crit.min}〜${row.crit.max})</div>`;
     h += `<div class="hpbar"><i class="max" style="width:${Math.min(100, (res.max / hp) * 100)}%"></i><i class="min" style="width:${Math.min(100, (res.min / hp) * 100)}%"></i></div>`;
+    if (row.fainted) h += faintedChips(row.fainted);
     if (Array.isArray(mv.mh)) {
-      h += `<div class="chips" onclick="event.stopPropagation()">${[2, 3, 4, 5].map((n) => `<button class="chip sm${res.hits === n ? ' on' : ''}" data-a="hits" data-k="${esc(row.key)}" data-v="${n}">${n}回</button>`).join('')}</div>`;
+      h += `<div class="chips">${[2, 3, 4, 5].map((n) => `<button class="chip sm${res.hits === n ? ' on' : ''}" data-a="hits" data-k="${esc(row.key)}" data-v="${n}">${n}回</button>`).join('')}</div>`;
     } else if (mv.mh) {
       h += `<div class="sub">${mv.mh}回攻撃として計算</div>`;
     }
