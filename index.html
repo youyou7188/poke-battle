@@ -285,7 +285,16 @@ input, select, textarea { font-size: 16px !important; }
 .fchip.wx { color: #fbbf24; border-color: #92660a; background: #1c1503; }
 .fchip.tr { color: #4ade80; border-color: #1b6b3a; background: #04170c; }
 .fchip.wl { color: #60a5fa; border-color: #1e4a8a; background: #050f20; }
-.fchip.ot { color: #e5e7eb; border-color: #4b5563; }
+.fchip.ot { color: #e5e7eb; border-color: #4b5563; }/* 状態欄の項目名 (状態異常・残りHP・タイプ変化) は幅をそろえる */
+.stl { flex: none; width: 5.2em; }
+.hprow input[type=range] { flex: 1; min-width: 0; }
+.hprow .hpnum { flex: none; width: 3.6em; text-align: right; padding: 4px 6px; }
+/* 直近に調べた相手6体 (自分のパーティの下)。赤系の枠で自分の列と見分ける。残りHPが減っていれば下に緑の線 */
+.opprow { margin-top: 4px; }
+.opprow .mem { border-color: #4a2a30; }
+.opprow .mem.on { border-color: var(--bad); }
+.mem .mhp { position: absolute; left: 5%; bottom: 2px; height: 3px; border-radius: 2px; background: var(--good); }
+
 </style>
 <div id="app"></div>
 <!--
@@ -403,8 +412,9 @@ window.PDATA = {"mons":[{"s":"venusaur","en":"Venusaur","n":"フシギバナ","n
     if (tc && /^(Protean|Libero)$/.test(opt.ability)) opt.ability = 'Pressure';
     if (opt.ability === 'Unburden' && mods.itemGone) opt.abilityOn = true; // かるわざ発動(ジャイロボール等の素早さ比較用)
     let p = new C.Pokemon(gen, m.en, opt);
-    if (mods.hpPct != null && mods.hpPct < 100) {
-      opt.curHP = Math.max(1, Math.floor((p.rawStats.hp * mods.hpPct) / 100));
+    // 残りHP: hpVal = 実数(自分), hpPct = %(相手)
+    if ((mods.hpVal != null && mods.hpVal < p.rawStats.hp) || (mods.hpVal == null && mods.hpPct != null && mods.hpPct < 100)) {
+      opt.curHP = mods.hpVal != null ? Math.max(1, mods.hpVal) : Math.max(1, Math.floor((p.rawStats.hp * mods.hpPct) / 100));
       p = new C.Pokemon(gen, m.en, opt);
     }
     // overrides で types を渡すと元の配列と混ざる(2つ目のタイプが残る)ので、作った後に置き換える
@@ -1531,6 +1541,14 @@ window.OCR_DIGITS = [
   if (!(S.pi >= 0 && S.pi < 10)) S.pi = 0;
   if (!(S.mi >= 0 && S.mi < 6)) S.mi = 0;
   S.recent = (S.recent || []).filter((s) => BY[s]);
+  // 相手の列(6枠。自分のパーティと同じく、選んでいる枠に検索した相手が入る)。調整(b)と、交代しても残る状態(残りHP・状態異常・持ち物消費・メガ)を覚える
+  {
+    const list = (Array.isArray(S.oppRecent) ? S.oppRecent : []).map((e) => (e && cleanBuild(e.b) ? { b: cleanBuild(e.b), mods: e.mods || {} } : null));
+    S.oppRecent = Array.from({ length: 6 }, (_, i) => list[i] || null);
+    if (S.opp && !S.oppRecent.some((e) => e && e.b.slug === S.opp.slug)) { const k = S.oppRecent.indexOf(null); S.oppRecent[k < 0 ? 0 : k] = { b: JSON.parse(JSON.stringify(S.opp)), mods: {} }; }
+    const cur = S.opp ? S.oppRecent.findIndex((e) => e && e.b.slug === S.opp.slug) : -1;
+    S.oppSlot = cur >= 0 ? cur : S.oppSlot >= 0 && S.oppSlot < 6 ? S.oppSlot : 0;
+  }
   // 画面だけの一時状態
   const U = { sheets: [], restOpen: false, openRow: null, q: '' };
 
@@ -1664,7 +1682,6 @@ window.OCR_DIGITS = [
   }
 
   /* ---------- 技リスト ---------- */
-  const PROTEAN = ['へんげんじざい', 'リベロ'];
   const TYPE_ORDER = ['ノーマル', 'ほのお', 'みず', 'でんき', 'くさ', 'こおり', 'かくとう', 'どく', 'じめん', 'ひこう', 'エスパー', 'むし', 'いわ', 'ゴースト', 'ドラゴン', 'あく', 'はがね', 'フェアリー'];
   const SELF_KO = ['explosion', 'selfdestruct', 'mistyexplosion', 'memento', 'finalgambit', 'futuresight', 'doomdesire']; // 自爆・遅れて当たる技は並びから除く
   const isDmg = (id) => MOVES[id] && MOVES[id].c !== '変化';
@@ -1758,9 +1775,11 @@ window.OCR_DIGITS = [
         if (!b) return `<button class="mem empty${i === S.mi ? ' on' : ''}" data-a="selmem" data-v="${i}">＋</button>`;
         return `<button class="mem${i === S.mi ? ' on' : ''}" data-a="selmem" data-v="${i}">${img(BY[b.slug])}</button>`;
       }).join('') + '</div>';
+      h += oppRecentRow(); // 自分の6体の下に、直近に調べた相手6体
       h += `<div style="margin-top:4px">${oppBox('相手を検索 (略称OK: ガブ / マンダ / Mルカ)')}</div>`;
     }
-    if (!opp && S.recent.length) {
+    if (S.freeMode) h += oppRecentRow();
+    if (!opp && !S.oppRecent.some(Boolean) && S.recent.length) {
       h += '<div class="chips nowrap" style="margin-top:4px"><span class="sub" style="flex:none;align-self:center">相手:</span>' + S.recent.map((s) => `<button class="chip sm" data-a="pickopp" data-v="${s}">${esc(BY[s].n)}</button>`).join('') + '</div>';
     }
     h += '<div class="card tight"><div class="vs">';
@@ -1876,6 +1895,28 @@ window.OCR_DIGITS = [
     const cur = (who === 'opp' ? S.oppMods : S.meMods).fainted || 0;
     return `<div class="chips"><span class="sub" style="flex:none;align-self:center">倒れた味方</span>${[0, 1, 2, 3, 4, 5].map((n) => `<button class="chip sm${cur === n ? ' on' : ''}" data-a="fainted" data-w="${who}" data-v="${n}">${n}体</button>`).join('')}</div>`;
   };
+  // 残りHP: ゲームの表示に合わせて 自分=実数(mods.hpVal、満タンは null) / 相手=%(mods.hpPct)。どちらも1刻み
+  function hpInfo(who) {
+    const b = getBuild(who);
+    if (!b) return null;
+    const mods = who === 'opp' ? S.oppMods : S.meMods;
+    const max = E.stats(effM(b, mods), b)[0];
+    let cur = max;
+    if (mods.hpVal != null) cur = Math.max(1, Math.min(max, mods.hpVal));
+    else if (mods.hpPct != null && mods.hpPct < 100) cur = Math.max(1, Math.floor((max * mods.hpPct) / 100));
+    return { max, cur, pct: mods.hpVal == null && mods.hpPct != null ? mods.hpPct : Math.round((cur / max) * 100) };
+  }
+  function hpRow(who) {
+    const h = hpInfo(who);
+    if (!h) return '';
+    const me = who === 'me', v = me ? h.cur : h.pct;
+    return `<div class="row hprow" style="margin-top:4px"><span class="sub stl">残りHP</span><input type="range" min="1" max="${me ? h.max : 100}" value="${v}" data-hp="${who}"><input class="hpnum" type="text" inputmode="numeric" id="hp-${who}" data-hp="${who}" value="${v}"><span class="sub" style="flex:none">${me ? '/' + h.max : '%'}</span></div>`;
+  }
+  function setHp(who, v) {
+    const h = hpInfo(who), mods = who === 'opp' ? S.oppMods : S.meMods;
+    if (!h || !(v > 0)) return;
+    if (who === 'me') { mods.hpVal = v >= h.max ? null : Math.round(v); mods.hpPct = 100; } else { mods.hpPct = Math.min(100, Math.round(v)); mods.hpVal = null; }
+  }
   function stateHTML(hasMe, hasOpp) {
     const blk = (who, label) => {
       const mods = who === 'opp' ? S.oppMods : S.meMods;
@@ -1884,12 +1925,13 @@ window.OCR_DIGITS = [
         const v = (mods.boosts && mods.boosts[k]) || 0;
         return `<div class="rk"><div class="lb">${BK_NAME[k]}</div><div class="rkc"><button data-a="bst" data-w="${who}" data-k="${k}" data-v="-1">−</button><span class="${v > 0 ? 'up' : v < 0 ? 'dn' : ''}">${v > 0 ? '+' + v : v}</span><button data-a="bst" data-w="${who}" data-k="${k}" data-v="1">＋</button></div></div>`;
       }).join('')}</div>
-      <div class="row" style="margin-top:4px">${sel('status', STATUS, mods.status || '')}${sel('hp', [100, 75, 50, 25, 10].map((v) => [v, 'HP ' + v + '%']), mods.hpPct)}<button class="chip sm${mods.tailwind ? ' on' : ''}" data-a="tailwind" data-w="${who}" style="flex:none">おいかぜ</button></div>
-      <div class="row" style="margin-top:4px"><span class="sub" style="flex:none">タイプ変化</span><select class="slim tchg${mods.typeChange ? ' on' : ''}" data-change="tchg" data-w="${who}"><option value="">なし${PROTEAN.includes(getBuild(who).ability) ? ' (へんげんじざい: 次の技がタイプ一致)' : ''}</option>${TYPE_ORDER.map((ty) => `<option value="${ty}"${mods.typeChange === ty ? ' selected' : ''}>→ ${ty}</option>`).join('')}</select>${canConsume(who) ? `<button class="chip sm${mods.itemGone ? ' on' : ''}" data-a="itemgone" data-w="${who}" style="flex:none">持ち物を消費</button>` : ''}</div></div>`;
+      <div class="row" style="margin-top:4px"><span class="sub stl">状態異常</span>${sel('status', STATUS, mods.status || '')}</div>
+      ${hpRow(who)}
+      <div class="row" style="margin-top:4px"><span class="sub stl">タイプ変化</span><select class="slim tchg${mods.typeChange ? ' on' : ''}" data-change="tchg" data-w="${who}"><option value="">なし</option>${TYPE_ORDER.map((ty) => `<option value="${ty}"${mods.typeChange === ty ? ' selected' : ''}>→ ${ty}</option>`).join('')}</select>${canConsume(who) ? `<button class="chip sm${mods.itemGone ? ' on' : ''}" data-a="itemgone" data-w="${who}" style="flex:none">持ち物を消費</button>` : ''}</div></div>`;
     };
     const meBlock = hasMe ? blk('me', '自分') : ''; // 自分の状態も常に開いておく(閉じていると相手の欄を自分のと間違えるため)
     if (!meBlock && !hasOpp) return '';
-    return `<div class="card tight"><div class="sec">状態 <span class="sec-note">ランク・状態異常・HP・おいかぜ・タイプ変化</span></div>${meBlock}${hasOpp ? blk('opp', '相手') : ''}</div>`;
+    return `<div class="card tight"><div class="sec">状態 <span class="sec-note">ランク・状態異常・残りHP・タイプ変化</span></div>${meBlock}${hasOpp ? blk('opp', '相手') : ''}</div>`;
   }
 
   // 場の状態の一覧 (上に常に表示)。ついている物だけをチップで出し、タップで解除。特性で自動に変わった物には「自動」
@@ -1924,6 +1966,9 @@ window.OCR_DIGITS = [
       <label class="f">天候</label><div class="chips">${WEATHER.map(([k, n]) => `<button class="chip${f.weather === k ? ' on' : ''}" data-a="weather" data-v="${k}">${n}</button>`).join('')}</div>
       <label class="f">フィールド</label><div class="chips">${TERRAIN.map(([k, n]) => `<button class="chip${f.terrain === k ? ' on' : ''}" data-a="terrain" data-v="${k}">${n}</button>`).join('')}</div>
       ${wall('myWalls', '自分側の壁')}${wall('oppWalls', '相手側の壁')}
+      <label class="f">おいかぜ</label><div class="chips">
+        <button class="chip${S.meMods.tailwind ? ' on' : ''}" data-a="tailwind" data-w="me">自分側</button>
+        <button class="chip${S.oppMods.tailwind ? ' on' : ''}" data-a="tailwind" data-w="opp">相手側</button></div>
       <label class="f">その他</label><div class="chips">
         <button class="chip${f.crit ? ' on' : ''}" data-a="fl" data-v="crit">急所</button>
         <button class="chip${f.myHelp ? ' on' : ''}" data-a="fl" data-v="myHelp">自分にてだすけ</button>
@@ -1959,10 +2004,9 @@ window.OCR_DIGITS = [
       ids = [];
     }
     U.rqCtx = { att, def };
-    const defHp = E.stats(def.m, def.b)[0];
-    const hpPct = def.mods.hpPct == null ? 100 : def.mods.hpPct;
+    const dh = hpInfo(out ? 'opp' : 'me') || { max: E.stats(def.m, def.b)[0], cur: 0, pct: 100 };
     const allDmg = att.m.mv.filter(isDmg);
-    let top = `<div class="card tight"><div class="row" style="margin:0 2px 2px"><div class="sec grow" style="margin:0">${esc(att.m.n)} → ${esc(def.m.n)}</div><span class="sub">相手HP ${defHp}${hpPct < 100 ? ' (' + hpPct + '%)' : ''}</span></div>`;
+    let top = `<div class="card tight"><div class="row" style="margin:0 2px 2px"><div class="sec grow" style="margin:0">${esc(att.m.n)} → ${esc(def.m.n)}</div><span class="sub">${out ? `相手HP ${dh.max}${dh.pct < 100 ? ' (残り' + dh.pct + '%)' : ''}` : `自分HP ${dh.cur < dh.max ? dh.cur + '/' : ''}${dh.max}`}</span></div>`;
     // 計算に入っているランク補正を見えるようにする (自分の状態はパーティ選択中は閉じているため)
     const rk = (who, mods) => BK.filter((k) => mods.boosts && mods.boosts[k]).map((k) => `${who}${BK_NAME[k]}${mods.boosts[k] > 0 ? '+' : ''}${mods.boosts[k]}`);
     const rks = rk('自分', S.meMods).concat(rk('相手', S.oppMods));
@@ -2008,11 +2052,13 @@ window.OCR_DIGITS = [
     const pct = (v) => (Math.round((v / hp) * 1000) / 10).toFixed(1);
     const pmin = pct(res.min), pmax = pct(res.max);
     const c = row.ko ? row.ko.c : 'k3';
-    let h = head + `<span class="big ${c}">${pmin}〜${pmax}<small>%</small></span></div>`;
+    // 相手→自分: 自分のHPは実数で見るので、ダメージの数値を大きく・%を小さく
+    const mine = S.dir === 'in';
+    let h = head + (mine ? `<span class="big ${c}">${res.min}〜${res.max}<small>/${res.cur}</small></span></div>` : `<span class="big ${c}">${pmin}〜${pmax}<small>%</small></span></div>`);
     const effTxt = res.eff === 1 ? '' : res.eff > 1 ? `<span class="eff2">×${res.eff}</span>` : `<span class="eff05">×${res.eff}</span>`;
-    h += `<div class="r2"><span class="ko ${c}">${row.ko ? row.ko.t : ''}</span><span class="sub">${res.min}〜${res.max} ${effTxt}</span></div>`;
+    h += `<div class="r2"><span class="ko ${c}">${row.ko ? row.ko.t : ''}</span><span class="sub">${mine ? `${pmin}〜${pmax}%` : `${res.min}〜${res.max}`} ${effTxt}</span></div>`;
     if (res.assumedItem) h += '<div class="sub">相手が持ち物を持っているとして計算 (持ち物なしなら失敗)</div>';
-    if (row.crit && row.crit.max > 0 && !S.field.crit) h += `<div class="crit">急所: ${pct(row.crit.min)}〜${pct(row.crit.max)}% (${row.crit.min}〜${row.crit.max})</div>`;
+    if (row.crit && row.crit.max > 0 && !S.field.crit) h += `<div class="crit">急所: ${mine ? `${row.crit.min}〜${row.crit.max} (${pct(row.crit.min)}〜${pct(row.crit.max)}%)` : `${pct(row.crit.min)}〜${pct(row.crit.max)}% (${row.crit.min}〜${row.crit.max})`}</div>`;
     h += `<div class="hpbar"><i class="max" style="width:${Math.min(100, (res.max / hp) * 100)}%"></i><i class="min" style="width:${Math.min(100, (res.min / hp) * 100)}%"></i></div>`;
     if (row.fainted) h += faintedChips(row.fainted);
     if (Array.isArray(mv.mh)) {
@@ -2273,6 +2319,7 @@ window.OCR_DIGITS = [
   /* ---------- 全体描画 ---------- */
   function render() {
     syncAutoField();
+    stashOpp(); // 今の相手の調整・状態を直近6体の列に反映
     const active = document.activeElement;
     const keep = active && active.id ? { id: active.id, start: active.selectionStart, end: active.selectionEnd } : null;
     const scrollY = window.scrollY;
@@ -2299,14 +2346,42 @@ window.OCR_DIGITS = [
     S.recent = [slug].concat(S.recent.filter((s) => s !== slug)).slice(0, 8);
   }
   // ポケモンを替えたら、ランク補正・状態異常・HP・タイプ変化・メガは元に戻す(前のポケモンの設定が残らないように)。おいかぜは場の状態なので残す
-  const freshMods = (old) => ({ boosts: {}, status: '', hpPct: 100, tailwind: !!(old && old.tailwind), form: '', typeChange: '', itemGone: false, fainted: (old && old.fainted) || 0 }); // 倒れた味方の数はチームの状態なので残す
-  function setOpp(slug) {
-    S.opp = buildFrom(BY[slug]);
-    S.oppMods = freshMods(S.oppMods);
+  const freshMods = (old) => ({ boosts: {}, status: '', hpPct: 100, hpVal: null, tailwind: !!(old && old.tailwind), form: '', typeChange: '', itemGone: false, fainted: (old && old.fainted) || 0 }); // 倒れた味方の数はチームの状態なので残す
+  // 相手を選ぶ: 列にいれば、その枠に移って調整と状態(残りHP等)を引き継ぐ。いなければ今選んでいる枠に入れる(前のポケモンは消える)
+  const OPP_KEEP = ['hpPct', 'hpVal', 'status', 'itemGone', 'form'];
+  function stashOpp() {
+    if (!S.opp) return;
+    const e = S.oppRecent.find((x) => x && x.b.slug === S.opp.slug);
+    if (!e) return;
+    e.b = JSON.parse(JSON.stringify(S.opp));
+    e.mods = {};
+    OPP_KEEP.forEach((k) => { if (S.oppMods[k] != null) e.mods[k] = S.oppMods[k]; });
+  }
+  function setOpp(slug, fromRow) {
+    stashOpp();
+    // 同じポケモン(通常/メガの違いだけ)は同じ枠として扱う
+    const i = S.oppRecent.findIndex((x) => x && BY[x.b.slug].no === BY[slug].no);
+    const e = i >= 0 ? S.oppRecent[i] : null;
+    S.opp = e ? JSON.parse(JSON.stringify(e.b)) : buildFrom(BY[slug]);
+    S.oppMods = Object.assign(freshMods(S.oppMods), e ? e.mods : {}); // ランク補正・タイプ変化は交代で戻る
+    // 検索で通常/メガを選んだときはその姿にする(列のアイコンをタップしたときは覚えている姿のまま)
+    if (e && !fromRow) S.oppMods.form = slug === e.b.slug ? '' : slug;
     remember(slug);
     U.q = '';
     U.openRow = null; U.restOpen = false; U.rq = '';
-    autoMega(S.opp, S.oppMods);
+    if (e) S.oppSlot = i;
+    else {
+      autoMega(S.opp, S.oppMods);
+      S.oppRecent[S.oppSlot] = { b: JSON.parse(JSON.stringify(S.opp)), mods: {} };
+    }
+  }
+  function oppRecentRow() {
+    return '<div class="members opprow">' + S.oppRecent.map((e, i) => {
+      const on = i === S.oppSlot ? ' on' : '';
+      if (!e) return `<button class="mem empty${on}" data-a="opprec" data-v="${i}" aria-label="相手${i + 1} (空き)">＋</button>`;
+      const m = effM(e.b, e.mods), pct = e.mods.hpVal == null && e.mods.hpPct != null ? e.mods.hpPct : 100;
+      return `<button class="mem${on}" data-a="opprec" data-v="${i}" aria-label="${esc(m.n)}">${img(m)}${pct < 100 ? `<i class="mhp" style="width:${Math.max(4, pct * 0.9)}%"></i>` : ''}</button>`;
+    }).join('') + '</div>';
   }
   // メガストーンを持たせた型はメガシンカ後の姿で計算する(「通常」ボタンで戻せる)。メガストーン以外に変えたら元の姿に戻す
   const MEGA_TO = {};
@@ -2378,6 +2453,14 @@ window.OCR_DIGITS = [
     },
     flip: () => { S.dir = S.dir === 'out' ? 'in' : 'out'; U.openRow = null; U.restOpen = false; U.rq = ''; },
     pickopp: (t) => setOpp(t.v),
+    opprec: (t) => {
+      const i = +t.v, e = S.oppRecent[i];
+      if (e) { setOpp(e.b.slug, true); return; }
+      // 空き枠: その枠を選んで、相手の検索窓へ(次に検索した相手がこの枠に入る)
+      stashOpp();
+      S.oppSlot = i; S.opp = null; S.oppMods = freshMods(S.oppMods);
+      setTimeout(() => { const q = document.getElementById('oppq'); if (q) q.focus(); }, 0);
+    },
     oppsel: (t) => setOpp(t.v),
     freesel: (t) => {
       S.free = buildFrom(BY[t.v]);
@@ -2590,6 +2673,7 @@ window.OCR_DIGITS = [
       if (t.dataset.w === 'opp') autoMega(b, S.oppMods);
       render();
     }
+    else if (t.dataset.hp) { setHp(t.dataset.hp, parseInt(String(t.value).replace(/[０-９]/g, (c) => c.charCodeAt(0) - 0xfee0), 10)); render(); }
     else if (t.dataset.change === 'mod') {
       const mods = t.dataset.w === 'opp' ? S.oppMods : S.meMods;
       if (t.dataset.k === 'hp') mods.hpPct = +t.value; else mods.status = t.value;
@@ -2598,6 +2682,11 @@ window.OCR_DIGITS = [
   });
   document.addEventListener('input', (e) => {
     const t = e.target;
+    if (t.dataset.hp && t.type === 'range') { // 残りHPのスライダー: ドラッグ中は数字の欄だけ更新し、離したら(change)計算し直す
+      const box = document.getElementById('hp-' + t.dataset.hp);
+      if (box) box.value = t.value;
+      return;
+    }
     if (t.dataset.range != null) { // ドラッグ中は再描画せず数字だけ更新 (再描画するとドラッグが切れる)
       const b = getBuild(t.dataset.w), k = +t.dataset.range;
       clampPts(b, k, +t.value);
