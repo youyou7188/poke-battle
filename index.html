@@ -392,6 +392,7 @@ window.PDATA = {"mons":[{"s":"venusaur","en":"Venusaur","n":"フシギバナ","n
     Object.keys(mods.boosts || {}).forEach((k) => { if (BOOST_KEY[k] && mods.boosts[k]) boosts[BOOST_KEY[k]] = mods.boosts[k]; });
     const opt = {
       nature: D.natures[b.nature] || 'Serious', evs, boosts,
+      alliesFainted: Math.min(5, mods.fainted || 0), // 倒れた味方の数 (そうだいしょう)
       ability: abilityEn(m, b.ability), item: (!mods.itemGone && ITEM_EN[b.item]) || undefined, // itemGone: 持ち物を消費した(きのみ・ジュエル・ふうせん等) status: STATUS[mods.status] || '',
     };
     // タイプが変わった後 (mods.typeChange = 日本語のタイプ名。へんげんじざい・リベロ / みずびたし など)
@@ -400,6 +401,7 @@ window.PDATA = {"mons":[{"s":"venusaur","en":"Venusaur","n":"フシギバナ","n
     // タイプ一致にするので、変化後は特性を効果の無いもの(プレッシャー)に置き換えて計算する
     const tc = mods.typeChange && D.types[mods.typeChange];
     if (tc && /^(Protean|Libero)$/.test(opt.ability)) opt.ability = 'Pressure';
+    if (opt.ability === 'Unburden' && mods.itemGone) opt.abilityOn = true; // かるわざ発動(ジャイロボール等の素早さ比較用)
     let p = new C.Pokemon(gen, m.en, opt);
     if (mods.hpPct != null && mods.hpPct < 100) {
       opt.curHP = Math.max(1, Math.floor((p.rawStats.hp * mods.hpPct) / 100));
@@ -511,7 +513,9 @@ window.PDATA = {"mons":[{"s":"venusaur","en":"Venusaur","n":"フシギバナ","n
     // (効果の無い道具を仮に持たせる。結果に assumedItem を付けて画面で注記する)
     const assumedItem = mv.en === 'Poltergeist' && !d.item && !(def.mods && def.mods.itemGone); // 消費済みなら本当に持っていない
     if (assumedItem) d.item = 'Lagging Tail';
-    const move = new C.Move(gen, mv.en, { isCrit: !!f.crit, hits: (opts && opts.hits) || undefined, ability: a.ability, item: a.item });
+    // おはかまいり: 威力 50 + 倒れた味方1体につき50 (計算機は常に50で計算するので威力を指定する)
+    const overrides = mv.en === 'Last Respects' ? { basePower: 50 * (1 + Math.min(5, (att.mods && att.mods.fainted) || 0)) } : undefined;
+    const move = new C.Move(gen, mv.en, { isCrit: !!f.crit, hits: (opts && opts.hits) || undefined, ability: a.ability, item: a.item, overrides });
     let r;
     try {
       r = C.calculate(gen, a, d, move, field(f));
@@ -550,7 +554,8 @@ window.PDATA = {"mons":[{"s":"venusaur","en":"Venusaur","n":"フシギバナ","n
     const mods4096 = [];
     if (mods && mods.tailwind) mods4096.push(8192);
     const w = WEATHER[f.weather] || '', t = TERRAIN[f.terrain];
-    if ((p.hasAbility('Chlorophyll') && w === 'Sun') || (p.hasAbility('Sand Rush') && w === 'Sand') ||
+    // かるわざ: 持ち物を消費した後は素早さ2倍 (計算機の getFinalSpeed と同じ並び)
+    if ((p.hasAbility('Unburden') && mods && mods.itemGone) || (p.hasAbility('Chlorophyll') && w === 'Sun') || (p.hasAbility('Sand Rush') && w === 'Sand') ||
       (p.hasAbility('Swift Swim') && w === 'Rain') || (p.hasAbility('Slush Rush') && w === 'Snow') ||
       (p.hasAbility('Surge Surfer') && t === 'Electric')) mods4096.push(8192);
     else if (p.hasAbility('Quick Feet') && p.status) mods4096.push(6144);
@@ -1857,7 +1862,21 @@ window.OCR_DIGITS = [
   }
   // 状態: ランク補正・状態異常・HP・おいかぜ・タイプ変化 (自分・相手とも常に表示)
   // 持ち物を消費した(きのみ・ジュエル・ふうせん等)ことにできるか。メガストーンは消えないので対象外
-  const canConsume = (b) => !!(b && b.item && !MEGA_TO[b.item]);
+  // かるわざのポケモンは、アプリで選べない持ち物(オボンのみ等)を持っていることが多いので、持ち物が未設定でも出す
+  const canConsume = (who) => {
+    const b = getBuild(who);
+    if (!b) return false;
+    const unburden = E.abilityEn(effM(b, who === 'opp' ? S.oppMods : S.meMods), b.ability) === 'Unburden';
+    return unburden ? !MEGA_TO[b.item] : !!(b.item && !MEGA_TO[b.item]);
+  };
+  // 倒れた味方の数: おはかまいり(威力 50+50×数)・そうだいしょう(1体ごとに威力約1.1倍) を使えるポケモンのときだけ出す
+  function usesFainted(who) {
+    const b = getBuild(who);
+    if (!b) return false;
+    const m = effM(b, who === 'opp' ? S.oppMods : S.meMods);
+    return m.mv.includes('lastrespects') || E.abilityEn(m, b.ability) === 'Supreme Overlord';
+  }
+  const faintedRow = (who, mods) => `<div class="row" style="margin-top:4px"><span class="sub" style="flex:none">倒れた味方</span><div class="chips">${[0, 1, 2, 3, 4, 5].map((n) => `<button class="chip sm${(mods.fainted || 0) === n ? ' on' : ''}" data-a="fainted" data-w="${who}" data-v="${n}">${n}体</button>`).join('')}</div></div>`;
   function stateHTML(hasMe, hasOpp) {
     const blk = (who, label) => {
       const mods = who === 'opp' ? S.oppMods : S.meMods;
@@ -1867,7 +1886,7 @@ window.OCR_DIGITS = [
         return `<div class="rk"><div class="lb">${BK_NAME[k]}</div><div class="rkc"><button data-a="bst" data-w="${who}" data-k="${k}" data-v="-1">−</button><span class="${v > 0 ? 'up' : v < 0 ? 'dn' : ''}">${v > 0 ? '+' + v : v}</span><button data-a="bst" data-w="${who}" data-k="${k}" data-v="1">＋</button></div></div>`;
       }).join('')}</div>
       <div class="row" style="margin-top:4px">${sel('status', STATUS, mods.status || '')}${sel('hp', [100, 75, 50, 25, 10].map((v) => [v, 'HP ' + v + '%']), mods.hpPct)}<button class="chip sm${mods.tailwind ? ' on' : ''}" data-a="tailwind" data-w="${who}" style="flex:none">おいかぜ</button></div>
-      <div class="row" style="margin-top:4px"><span class="sub" style="flex:none">タイプ変化</span><select class="slim tchg${mods.typeChange ? ' on' : ''}" data-change="tchg" data-w="${who}"><option value="">なし${PROTEAN.includes(getBuild(who).ability) ? ' (へんげんじざい: 次の技がタイプ一致)' : ''}</option>${TYPE_ORDER.map((ty) => `<option value="${ty}"${mods.typeChange === ty ? ' selected' : ''}>→ ${ty}</option>`).join('')}</select>${canConsume(getBuild(who)) ? `<button class="chip sm${mods.itemGone ? ' on' : ''}" data-a="itemgone" data-w="${who}" style="flex:none">持ち物を消費</button>` : ''}</div></div>`;
+      <div class="row" style="margin-top:4px"><span class="sub" style="flex:none">タイプ変化</span><select class="slim tchg${mods.typeChange ? ' on' : ''}" data-change="tchg" data-w="${who}"><option value="">なし${PROTEAN.includes(getBuild(who).ability) ? ' (へんげんじざい: 次の技がタイプ一致)' : ''}</option>${TYPE_ORDER.map((ty) => `<option value="${ty}"${mods.typeChange === ty ? ' selected' : ''}>→ ${ty}</option>`).join('')}</select>${canConsume(who) ? `<button class="chip sm${mods.itemGone ? ' on' : ''}" data-a="itemgone" data-w="${who}" style="flex:none">持ち物を消費</button>` : ''}</div>${usesFainted(who) ? faintedRow(who, mods) : ''}</div>`;
     };
     const meBlock = hasMe ? blk('me', '自分') : ''; // 自分の状態も常に開いておく(閉じていると相手の欄を自分のと間違えるため)
     if (!meBlock && !hasOpp) return '';
@@ -2043,7 +2062,7 @@ window.OCR_DIGITS = [
     const mk = (label, sub, pts, nature, item, cur) => {
       const b = { slug: opp.slug, pts, nature, ability: opp.ability, item };
       const mm = cur ? null : megaOf(item); // 今の相手設定は計算タブで選んでいる姿(通常/メガ)のまま
-      entries.push({ label: mm && mm !== om ? label + ' (メガ後)' : label, sub, sp: E.speed(mm || om, b, S.oppMods, fl), me: false });
+      entries.push({ label: mm && mm !== om ? label + ' (メガ後)' : label, sub, sp: E.speed(mm || om, b, cur || !item ? S.oppMods : Object.assign({}, S.oppMods, { itemGone: false }), fl), me: false });
     };
     const spPts = (v) => [0, 0, 0, 0, 0, v];
     mk('最速 (素早32・性格↑)', 'ようき/おくびょう等', spPts(32), 'ようき', '');
@@ -2280,7 +2299,7 @@ window.OCR_DIGITS = [
     S.recent = [slug].concat(S.recent.filter((s) => s !== slug)).slice(0, 8);
   }
   // ポケモンを替えたら、ランク補正・状態異常・HP・タイプ変化・メガは元に戻す(前のポケモンの設定が残らないように)。おいかぜは場の状態なので残す
-  const freshMods = (old) => ({ boosts: {}, status: '', hpPct: 100, tailwind: !!(old && old.tailwind), form: '', typeChange: '', itemGone: false });
+  const freshMods = (old) => ({ boosts: {}, status: '', hpPct: 100, tailwind: !!(old && old.tailwind), form: '', typeChange: '', itemGone: false, fainted: (old && old.fainted) || 0 }); // 倒れた味方の数はチームの状態なので残す
   function setOpp(slug) {
     S.opp = buildFrom(BY[slug]);
     S.oppMods = freshMods(S.oppMods);
@@ -2450,6 +2469,7 @@ window.OCR_DIGITS = [
       else if ('BD'.includes(t.k) && attacker) toast(`今は${t.w === 'me' ? '自分が攻撃する' : '相手が攻撃する'}向きなので${BK_NAME[t.k]}はふつうの技のダメージに影響しません (▶で向きを切替)`);
     },
     tailwind: (t) => { const m = t.w === 'opp' ? S.oppMods : S.meMods; m.tailwind = !m.tailwind; },
+    fainted: (t) => { (t.w === 'opp' ? S.oppMods : S.meMods).fainted = +t.v; },
     itemgone: (t) => { const m = t.w === 'opp' ? S.oppMods : S.meMods; m.itemGone = !m.itemGone; },
     // 手で選んだ天候・フィールドは、特性で自動にしたものとして扱わない(ポケモンを替えても戻さない)
     weather: (t) => { S.field.weather = t.v; S.field.auto.weather = ''; },
